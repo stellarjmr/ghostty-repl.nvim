@@ -1,20 +1,21 @@
 # ghostty-repl.nvim
 
-Send Python code from Neovim to an IPython REPL. A lightweight, zero-dependency alternative to [vim-slime](https://github.com/jpalardy/vim-slime) and [iron.nvim](https://github.com/Vigemus/iron.nvim), designed for Ghostty users but works in any terminal.
+Send Python code from Neovim to an IPython REPL running in a [Ghostty](https://ghostty.org) terminal split. A lightweight, zero-dependency alternative to [vim-slime](https://github.com/jpalardy/vim-slime) and [iron.nvim](https://github.com/Vigemus/iron.nvim) for Ghostty users.
 
 ## Features
 
 - Send current line, visual selection, code cell (`# %%` delimited), or entire file
-- REPL runs in a Neovim terminal split via `chansend()` -- direct, reliable communication
+- Auto-creates an IPython split in Ghostty with configurable direction and size
 - Multiline code sent using bracketed paste mode -- no clipboard interference
+- Auto-syncs working directory to the current file before each send
 - Auto-detects conda Python environments with IPython
-- Automatically changes working directory to match the current file
 - Auto-closes REPL on Neovim exit
-- Fully customizable keymaps, split direction, and split size
+- Fully customizable keymaps with option to disable any binding
 
 ## Requirements
 
-- **Neovim** >= 0.9
+- **macOS** (uses AppleScript via `osascript` for Ghostty automation)
+- **[Ghostty](https://ghostty.org)** terminal emulator
 - **Python with IPython** installed (auto-detected from conda, or specify explicitly)
 
 ## Installation
@@ -24,6 +25,7 @@ Send Python code from Neovim to an IPython REPL. A lightweight, zero-dependency 
 ```lua
 {
   "stellarjmr/ghostty-repl.nvim",
+  enabled = vim.fn.has("mac") == 1,
   ft = "python",
   opts = {},
 }
@@ -34,11 +36,12 @@ Send Python code from Neovim to an IPython REPL. A lightweight, zero-dependency 
 ```lua
 {
   "stellarjmr/ghostty-repl.nvim",
+  enabled = vim.fn.has("mac") == 1,
   ft = "python",
   opts = {
     python_path = "~/conda/envs/myenv/bin/python",
     split_direction = "bottom",
-    split_size = 15,
+    split_size = 50,
     keymaps = {
       send_cell = "<leader>sc",
       send_line = "<leader>sl",
@@ -65,11 +68,11 @@ require("ghostty_repl").setup({
   -- Cell delimiter string used to identify code cells
   cell_delimiter = "# %%",
 
-  -- Direction for the REPL split: "right" or "bottom"
+  -- Direction for the Ghostty split: "right" or "bottom"
   split_direction = "right",
 
-  -- REPL window size: columns (right) or rows (bottom)
-  split_size = 80,
+  -- Number of resize keystrokes to shrink the REPL pane (~30% at 40)
+  split_size = 40,
 
   -- Keymaps (set any key to false to disable that binding)
   keymaps = {
@@ -126,7 +129,7 @@ Press `<leader>sc` with the cursor in any cell to send just that cell to IPython
 
 ## IPython Startup Configuration
 
-For inline matplotlib display in terminals that support the kitty graphics protocol (Kitty, Ghostty), add startup scripts to `~/.config/ipython/profile_default/startup/`.
+For inline matplotlib display in Ghostty, add startup scripts to `~/.config/ipython/profile_default/startup/`.
 
 Create `kitty_matplotlib.py`:
 
@@ -194,13 +197,13 @@ print("[startup] Inline matplotlib backend loaded.")
 
 ## How It Works
 
-1. When you first send code, the plugin auto-detects a Python environment with IPython
-2. A Neovim terminal split is created running IPython, sized according to your config
-3. Before each send, the REPL's working directory is synced to the current file's directory
-4. Code is sent directly via `vim.fn.chansend()`:
-   - Single lines are sent with a carriage return
-   - Multiline blocks use bracketed paste mode (`ESC[200~...ESC[201~`) so IPython executes them as a single unit
-5. The REPL is gracefully closed on `:GhosttyReplClose` or when Neovim exits
+1. When you first send code, the plugin detects the current Ghostty terminal via AppleScript
+2. It auto-detects a Python environment with IPython installed (from conda or a configured path)
+3. A new Ghostty split is created running IPython, resized according to `split_size`
+4. Before each send, `os.chdir()` is prepended to the code to sync the working directory
+5. Code is sent using bracketed paste mode (`ESC[200~...ESC[201~`) via AppleScript `input text`, so IPython executes it as a single block -- no clipboard interference
+6. Focus returns to your editor terminal after each send
+7. The REPL is gracefully closed on `:GhosttyReplClose` or when Neovim exits
 
 ## License
 

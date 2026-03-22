@@ -22,10 +22,9 @@ function M.send(kind)
     return
   end
 
-  local file_dir = vim.fn.expand("%:p:h")
-  local ok, err = terminal.send_text(source_id, repl_id, code, file_dir)
+  local ok, err = terminal.send_text_and_refocus(source_id, repl_id, code)
   if not ok then
-    vim.notify("Failed to send text to REPL: " .. (err or ""), vim.log.levels.ERROR)
+    vim.notify("Failed to send text to Ghostty REPL: " .. (err or ""), vim.log.levels.ERROR)
   end
 end
 

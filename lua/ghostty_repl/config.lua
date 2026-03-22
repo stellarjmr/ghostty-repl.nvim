@@ -13,8 +13,8 @@ M.defaults = {
   -- Direction for the Ghostty split: "right" or "bottom"
   split_direction = "right",
 
-  -- Number of resize keystrokes to shrink the REPL pane (~30% at 40)
-  split_size = 40,
+  -- REPL pane size as percentage of window (1-50)
+  split_size = 30,
 
   -- Keymaps (set a key to false to disable that binding)
   keymaps = {

@@ -176,14 +176,15 @@ end run
   state.repl_id = output
   M.focus_terminal(source_terminal_id)
 
-  -- Resize the REPL pane
+  -- Resize the REPL pane: split starts at 50/50, each keystroke shrinks by ~0.5%
   local split_size = config.options.split_size
-  if split_size > 0 then
+  local keystrokes = math.max(0, (50 - split_size) * 2)
+  if keystrokes > 0 then
     run_osascript([[
 on run argv
   tell application "Ghostty"
     set t to first terminal whose id is (item 1 of argv)
-    repeat ]] .. split_size .. [[ times
+    repeat ]] .. keystrokes .. [[ times
       send key "minus" modifiers "option" to t
     end repeat
   end tell
@@ -194,38 +195,39 @@ end run
   return output
 end
 
---- Send text to the REPL using bracketed paste mode.
---- Prepends os.chdir() to sync working directory atomically.
---- No clipboard involvement.
-function M.send_text(source_id, repl_id, text, file_dir)
-  -- Prepend os.chdir to sync working directory
-  local payload = text
-  if file_dir and file_dir ~= "" then
-    local escaped_dir = file_dir:gsub("'", "\\'")
-    payload = "import os; os.chdir('" .. escaped_dir .. "')\n" .. payload
-  end
+function M.send_text_and_refocus(source_id, repl_id, text)
+  local multiline = text:find("\n") and text:find("\n[^\n]")
 
-  -- Use bracketed paste via AppleScript input text.
-  -- ESC[200~ starts bracketed paste, ESC[201~ ends it.
-  -- IPython handles this natively and executes the block as one unit.
-  local ok, err = run_osascript([[
+  if multiline then
+    -- Copy to system clipboard and use IPython's %paste to avoid line-by-line execution
+    vim.fn.system("pbcopy", text)
+    return run_osascript([[
 on run argv
   set sourceId to item 1 of argv
   set replId to item 2 of argv
-  set payload to item 3 of argv
-  set escChar to ASCII character 27
-  set bracketStart to escChar & "[200~"
-  set bracketEnd to escChar & "[201~"
   tell application "Ghostty"
     set replTerm to first terminal whose id is replId
-    input text (bracketStart & payload & bracketEnd) to replTerm
+    input text "%paste" to replTerm
     send key "enter" to replTerm
     focus (first terminal whose id is sourceId)
   end tell
 end run
-]], { source_id, repl_id, payload })
+]], { source_id, repl_id })
+  end
 
-  return ok, err
+  return run_osascript([[
+on run argv
+  set sourceId to item 1 of argv
+  set replId to item 2 of argv
+  set payload to item 3 of argv
+  tell application "Ghostty"
+    set replTerm to first terminal whose id is replId
+    input text payload to replTerm
+    send key "enter" to replTerm
+    focus (first terminal whose id is sourceId)
+  end tell
+end run
+]], { source_id, repl_id, text })
 end
 
 function M.exit_and_close_repl()

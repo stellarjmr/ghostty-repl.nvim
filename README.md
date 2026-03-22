@@ -1,20 +1,20 @@
 # ghostty-repl.nvim
 
-Send Python code from Neovim to an IPython REPL running in a [Ghostty](https://ghostty.org) terminal split. A lightweight, zero-dependency alternative to [vim-slime](https://github.com/jpalardy/vim-slime) and [iron.nvim](https://github.com/Vigemus/iron.nvim) for Ghostty users on macOS.
+Send Python code from Neovim to an IPython REPL. A lightweight, zero-dependency alternative to [vim-slime](https://github.com/jpalardy/vim-slime) and [iron.nvim](https://github.com/Vigemus/iron.nvim), designed for Ghostty users but works in any terminal.
 
 ## Features
 
 - Send current line, visual selection, code cell (`# %%` delimited), or entire file
-- Auto-creates an IPython split in Ghostty with configurable direction and size
-- Multiline code sent via `%paste` (pbcopy) for correct execution
+- REPL runs in a Neovim terminal split via `chansend()` -- direct, reliable communication
+- Multiline code sent using bracketed paste mode -- no clipboard interference
 - Auto-detects conda Python environments with IPython
+- Automatically changes working directory to match the current file
 - Auto-closes REPL on Neovim exit
-- Fully customizable keymaps with option to disable any binding
+- Fully customizable keymaps, split direction, and split size
 
 ## Requirements
 
-- **macOS** (uses AppleScript via `osascript` for Ghostty automation)
-- **[Ghostty](https://ghostty.org)** terminal emulator
+- **Neovim** >= 0.9
 - **Python with IPython** installed (auto-detected from conda, or specify explicitly)
 
 ## Installation
@@ -24,7 +24,6 @@ Send Python code from Neovim to an IPython REPL running in a [Ghostty](https://g
 ```lua
 {
   "stellarjmr/ghostty-repl.nvim",
-  enabled = vim.fn.has("mac") == 1,
   ft = "python",
   opts = {},
 }
@@ -35,12 +34,11 @@ Send Python code from Neovim to an IPython REPL running in a [Ghostty](https://g
 ```lua
 {
   "stellarjmr/ghostty-repl.nvim",
-  enabled = vim.fn.has("mac") == 1,
   ft = "python",
   opts = {
     python_path = "~/conda/envs/myenv/bin/python",
     split_direction = "bottom",
-    split_size = 30,
+    split_size = 15,
     keymaps = {
       send_cell = "<leader>sc",
       send_line = "<leader>sl",
@@ -67,11 +65,11 @@ require("ghostty_repl").setup({
   -- Cell delimiter string used to identify code cells
   cell_delimiter = "# %%",
 
-  -- Direction for the Ghostty split: "right" or "bottom"
+  -- Direction for the REPL split: "right" or "bottom"
   split_direction = "right",
 
-  -- Number of resize keystrokes to shrink the REPL pane (~30% at 40)
-  split_size = 40,
+  -- REPL window size: columns (right) or rows (bottom)
+  split_size = 80,
 
   -- Keymaps (set any key to false to disable that binding)
   keymaps = {
@@ -82,7 +80,7 @@ require("ghostty_repl").setup({
     close_repl = "<leader>rq",
   },
 
-  -- Automatically close the REPL split on VimLeavePre
+  -- Automatically close the REPL on VimLeavePre
   auto_close_on_exit = true,
 })
 ```
@@ -128,22 +126,16 @@ Press `<leader>sc` with the cursor in any cell to send just that cell to IPython
 
 ## IPython Startup Configuration
 
-For inline matplotlib display in Ghostty, you can add a startup script to `~/.config/ipython/profile_default/startup/`. Create a file like `10-matplotlib.py`:
+For inline matplotlib display in terminals that support the kitty graphics protocol (Kitty, Ghostty), add startup scripts to `~/.config/ipython/profile_default/startup/`.
 
-```python
-from kitty_matplotlib import use_kitty_show
-use_kitty_show()
-print("[startup] Inline matplotlib backend loaded.")
-```
-
-And the corresponding `kitty_matplotlib.py` module in the same directory:
+Create `kitty_matplotlib.py`:
 
 ```python
 """
 Kitty/Ghostty inline image backend for matplotlib.
 
-Overrides plt.show() to render figures directly inside Kitty or Ghostty
-terminals. Uses kitty +kitten icat for Kitty and chafa for Ghostty.
+Overrides plt.show() to render figures directly inside terminals
+that support the kitty graphics protocol or chafa for fallback.
 """
 
 import os
@@ -192,14 +184,23 @@ def use_default_show():
     plt.show = _original_show
 ```
 
+Then create `10-matplotlib.py` to load it on startup:
+
+```python
+from kitty_matplotlib import use_kitty_show
+use_kitty_show()
+print("[startup] Inline matplotlib backend loaded.")
+```
+
 ## How It Works
 
-1. When you first send code, the plugin detects the current Ghostty terminal via AppleScript
-2. It auto-detects a Python environment with IPython installed (from conda or a configured path)
-3. A new Ghostty split is created running IPython, resized to ~30% width
-4. Code is sent to the REPL: single lines via direct text input, multiline blocks via `pbcopy` + IPython's `%paste` magic
-5. Focus returns to your editor terminal after each send
-6. The REPL is gracefully closed on `:GhosttyReplClose` or when Neovim exits
+1. When you first send code, the plugin auto-detects a Python environment with IPython
+2. A Neovim terminal split is created running IPython, sized according to your config
+3. Before each send, the REPL's working directory is synced to the current file's directory
+4. Code is sent directly via `vim.fn.chansend()`:
+   - Single lines are sent with a carriage return
+   - Multiline blocks use bracketed paste mode (`ESC[200~...ESC[201~`) so IPython executes them as a single unit
+5. The REPL is gracefully closed on `:GhosttyReplClose` or when Neovim exits
 
 ## License
 

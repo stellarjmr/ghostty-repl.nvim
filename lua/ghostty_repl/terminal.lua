@@ -3,37 +3,10 @@ local M = {}
 local config = require("ghostty_repl.config")
 
 local state = {
-  repl_id = nil,
+  bufnr = nil,
+  chan_id = nil,
   python = nil,
 }
-
-local function trim(s)
-  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
-end
-
-local function system_with_input(cmd, input)
-  local output = vim.fn.system(cmd, input)
-  local code = vim.v.shell_error
-  return code, output
-end
-
-local function run_osascript(script, args)
-  local cmd = { "osascript", "-" }
-  for _, arg in ipairs(args or {}) do
-    table.insert(cmd, arg)
-  end
-
-  local code, output = system_with_input(cmd, script)
-  return code == 0, trim(output)
-end
-
-local function notify_error(msg)
-  vim.notify(msg, vim.log.levels.ERROR)
-end
-
-local function shell_quote(value)
-  return vim.fn.shellescape(value)
-end
 
 local function cmd_ok(argv)
   vim.fn.system(argv)
@@ -47,17 +20,16 @@ local function detect_ipython_python()
 
   local opts = config.options
 
-  -- If an explicit python_path is configured, use it directly
   if opts.python_path then
-    if vim.fn.executable(opts.python_path) == 1 and cmd_ok({ opts.python_path, "-c", "import IPython" }) then
-      state.python = opts.python_path
-      return opts.python_path
+    local py = vim.fn.expand(opts.python_path)
+    if vim.fn.executable(py) == 1 and cmd_ok({ py, "-c", "import IPython" }) then
+      state.python = py
+      return py
     end
     return nil
   end
 
-  -- Auto-detect from conda
-  local conda_base = opts.conda_base
+  local conda_base = vim.fn.expand(opts.conda_base)
   local candidates = { conda_base .. "/bin/python" }
   local envs_dir = conda_base .. "/envs"
 
@@ -77,218 +49,155 @@ local function detect_ipython_python()
   return nil
 end
 
-function M.current_terminal_id()
-  local ok, output = run_osascript([[
-tell application "Ghostty"
-  return id of focused terminal of selected tab of front window
-end tell
-]])
-  if not ok or output == "" then
-    return nil
-  end
-  return output
-end
-
-function M.terminal_exists(terminal_id)
-  if not terminal_id or terminal_id == "" then
+function M.is_alive()
+  if not state.chan_id then
     return false
   end
-
-  local ok, output = run_osascript([[
-on run argv
-  set targetId to item 1 of argv
-  tell application "Ghostty"
-    try
-      set targetTerm to first terminal whose id is targetId
-      return "1"
-    on error
-      return "0"
-    end try
-  end tell
-end run
-]], { terminal_id })
-  return ok and output == "1"
+  local result = vim.fn.jobwait({ state.chan_id }, 0)
+  -- jobwait returns -1 if job is still running
+  return result[1] == -1
 end
 
-function M.focus_terminal(terminal_id)
-  if not terminal_id or terminal_id == "" then
-    return false, "missing terminal id"
-  end
-
-  return run_osascript([[
-on run argv
-  set targetId to item 1 of argv
-  tell application "Ghostty"
-    focus (first terminal whose id is targetId)
-  end tell
-end run
-]], { terminal_id })
-end
-
-function M.close_terminal(terminal_id)
-  if not terminal_id or terminal_id == "" then
-    return false, "missing terminal id"
-  end
-
-  return run_osascript([[
-on run argv
-  set targetId to item 1 of argv
-  tell application "Ghostty"
-    close (first terminal whose id is targetId)
-  end tell
-end run
-]], { terminal_id })
-end
-
-function M.send_text_and_refocus(source_id, repl_id, text)
-  local multiline = text:find("\n") and text:find("\n[^\n]")
-
-  if multiline then
-    vim.fn.system("pbcopy", text)
-    return run_osascript([[
-on run argv
-  set sourceId to item 1 of argv
-  set replId to item 2 of argv
-  tell application "Ghostty"
-    set replTerm to first terminal whose id is replId
-    input text "%paste" to replTerm
-    send key "enter" to replTerm
-    focus (first terminal whose id is sourceId)
-  end tell
-end run
-]], { source_id, repl_id })
-  end
-
-  return run_osascript([[
-on run argv
-  set sourceId to item 1 of argv
-  set replId to item 2 of argv
-  set payload to item 3 of argv
-  tell application "Ghostty"
-    set replTerm to first terminal whose id is replId
-    input text payload to replTerm
-    send key "enter" to replTerm
-    focus (first terminal whose id is sourceId)
-  end tell
-end run
-]], { source_id, repl_id, text })
-end
-
-function M.ensure_repl(source_terminal_id)
-  if M.terminal_exists(state.repl_id) then
-    return state.repl_id
-  end
-
-  if not source_terminal_id or source_terminal_id == "" then
-    notify_error("Ghostty source terminal is unavailable")
+function M.get_repl_win()
+  if not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
     return nil
+  end
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == state.bufnr then
+      return win
+    end
+  end
+  return nil
+end
+
+function M.ensure_repl()
+  if M.is_alive() then
+    return state.chan_id
   end
 
   local python = detect_ipython_python()
   if not python then
-    notify_error("No Python with IPython found")
+    vim.notify("No Python with IPython found", vim.log.levels.ERROR)
     return nil
   end
 
-  local cwd = vim.fn.expand("%:p:h")
-  local init_text = "exec " .. shell_quote(python) .. " -m IPython\n"
+  local file_dir = vim.fn.expand("%:p:h")
+  local src_win = vim.api.nvim_get_current_win()
 
-  -- Translate split_direction for AppleScript
+  -- Create split
   local direction = config.options.split_direction
+  local size = config.options.split_size
   if direction == "bottom" then
-    direction = "down"
+    vim.cmd("botright " .. size .. "split")
+  else
+    vim.cmd("botright " .. size .. "vsplit")
   end
 
-  local ok, output = run_osascript([[
-on run argv
-  set sourceId to item 1 of argv
-  set workingDir to item 2 of argv
-  set initialInputValue to item 3 of argv
-  set splitDir to item 4 of argv
-  tell application "Ghostty"
-    set cfg to new surface configuration
-    set initial working directory of cfg to workingDir
-    set initial input of cfg to initialInputValue
-    set sourceTerm to first terminal whose id is sourceId
-    if splitDir is "down" then
-      set replTerm to split sourceTerm direction down with configuration cfg
-    else
-      set replTerm to split sourceTerm direction right with configuration cfg
-    end if
-    return id of replTerm
-  end tell
-end run
-]], { source_terminal_id, cwd, init_text, direction })
+  -- Start IPython in the new split
+  local cmd = python .. " -m IPython"
+  if file_dir ~= "" then
+    cmd = "cd " .. vim.fn.shellescape(file_dir) .. " && " .. cmd
+  end
 
-  if not ok or output == "" then
-    notify_error("Failed to create Ghostty REPL split: " .. output)
+  local chan_id = vim.fn.termopen(cmd, {
+    on_exit = function()
+      state.bufnr = nil
+      state.chan_id = nil
+    end,
+  })
+
+  if chan_id <= 0 then
+    vim.notify("Failed to start IPython", vim.log.levels.ERROR)
+    vim.cmd("close")
     return nil
   end
 
-  state.repl_id = output
-  M.focus_terminal(source_terminal_id)
+  state.bufnr = vim.api.nvim_get_current_buf()
+  state.chan_id = chan_id
 
-  -- Resize the REPL pane
-  local split_size = config.options.split_size
-  if split_size > 0 then
-    run_osascript([[
-on run argv
-  tell application "Ghostty"
-    set t to first terminal whose id is (item 1 of argv)
-    repeat ]] .. split_size .. [[ times
-      send key "minus" modifiers "option" to t
-    end repeat
-  end tell
-end run
-]], { source_terminal_id })
-  end
+  -- Return focus to the source window
+  vim.api.nvim_set_current_win(src_win)
 
-  return output
+  return chan_id
 end
 
-function M.exit_and_close_repl()
-  local terminal_id = state.repl_id
-  if not terminal_id or terminal_id == "" then
+function M.send(text)
+  if not M.is_alive() then
     return false
   end
 
-  if not M.terminal_exists(terminal_id) then
-    state.repl_id = nil
-    return true
+  -- Count non-empty lines to detect multiline
+  local line_count = 0
+  for line in text:gmatch("[^\n]+") do
+    if line:match("%S") then
+      line_count = line_count + 1
+    end
   end
 
-  local source_id = M.current_terminal_id()
-
-  run_osascript([[
-on run argv
-  set targetId to item 1 of argv
-  tell application "Ghostty"
-    set t to first terminal whose id is targetId
-    input text "exit()" to t
-    send key "enter" to t
-  end tell
-end run
-]], { terminal_id })
-
-  local exited = vim.wait(1500, function()
-    return not M.terminal_exists(terminal_id)
-  end, 50)
-
-  if not exited then
-    M.close_terminal(terminal_id)
-  end
-
-  state.repl_id = nil
-
-  if source_id then
-    M.focus_terminal(source_id)
+  if line_count > 1 then
+    -- Bracketed paste mode: IPython treats entire block as one input
+    local payload = "\x1b[200~" .. text .. "\x1b[201~"
+    vim.fn.chansend(state.chan_id, payload)
+    -- Send enter after bracketed paste to execute
+    vim.fn.chansend(state.chan_id, "\r")
+  else
+    -- Single line: strip trailing newline and send with CR
+    local line = text:gsub("\n+$", "")
+    vim.fn.chansend(state.chan_id, line .. "\r")
   end
 
   return true
 end
 
-function M.get_repl_id()
-  return state.repl_id
+function M.change_dir(dir)
+  if not M.is_alive() or not dir or dir == "" then
+    return
+  end
+  -- Use Python os.chdir to avoid IPython %cd output noise
+  local escaped = dir:gsub("'", "\\'")
+  vim.fn.chansend(state.chan_id, "import os; os.chdir('" .. escaped .. "')\r")
+end
+
+function M.close()
+  if not M.is_alive() then
+    state.bufnr = nil
+    state.chan_id = nil
+    return
+  end
+
+  vim.fn.chansend(state.chan_id, "exit()\r")
+
+  -- Wait for IPython to exit
+  local exited = vim.wait(1500, function()
+    return not M.is_alive()
+  end, 50)
+
+  if not exited and state.chan_id then
+    pcall(vim.fn.jobstop, state.chan_id)
+  end
+
+  -- Close the REPL window if it's still open
+  local win = M.get_repl_win()
+  if win then
+    pcall(vim.api.nvim_win_close, win, true)
+  end
+
+  -- Delete the buffer
+  if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+    pcall(vim.api.nvim_buf_delete, state.bufnr, { force = true })
+  end
+
+  state.bufnr = nil
+  state.chan_id = nil
+end
+
+function M.focus()
+  local win = M.get_repl_win()
+  if win then
+    vim.api.nvim_set_current_win(win)
+    return true
+  end
+  return false
 end
 
 return M

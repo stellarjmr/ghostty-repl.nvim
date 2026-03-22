@@ -10,11 +10,11 @@ M.defaults = {
   -- Cell delimiter string used to identify code cells
   cell_delimiter = "# %%",
 
-  -- Direction for the Ghostty split: "right" or "bottom"
+  -- Direction for the REPL split: "right" or "bottom"
   split_direction = "right",
 
-  -- Number of resize keystrokes to shrink the REPL pane (~30% at 40)
-  split_size = 40,
+  -- REPL window size: columns (right) or rows (bottom)
+  split_size = 80,
 
   -- Keymaps (set a key to false to disable that binding)
   keymaps = {
@@ -25,7 +25,7 @@ M.defaults = {
     close_repl = "<leader>rq",
   },
 
-  -- Automatically close the REPL split on VimLeavePre
+  -- Automatically close the REPL on VimLeavePre
   auto_close_on_exit = true,
 }
 
